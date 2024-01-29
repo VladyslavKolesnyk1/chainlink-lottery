@@ -7,9 +7,15 @@ import "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
 import "@chainlink/contracts/src/v0.8/automation/AutomationCompatible.sol";
 
 contract Lottery is Ownable, VRFConsumerBaseV2, AutomationCompatibleInterface {
+    enum LotteryState {
+        Open,
+        Pending,
+        FullFilled
+    }
+
     struct SingleLottery {
         bool claimed;
-        bool winnerPicked;
+        LotteryState status;
         uint256 startTime;
         uint256 endTime;
         uint256 winningTicket;
@@ -65,7 +71,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, AutomationCompatibleInterface {
         uint256 _currentLotteryId = currentLotteryId;
         SingleLottery memory _lottery = lotteries[_currentLotteryId];
 
-        upkeepNeeded = !_lottery.winnerPicked && block.timestamp >= _lottery.endTime;
+        upkeepNeeded = _lottery.status == LotteryState.Open && block.timestamp >= _lottery.endTime;
     }
 
     function performUpkeep(bytes calldata /* performData */) external override {
@@ -77,7 +83,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, AutomationCompatibleInterface {
         uint256 _currentLotteryId = currentLotteryId;
         SingleLottery memory _lottery = lotteries[_currentLotteryId];
 
-        require(!_lottery.winnerPicked, "Winner has been picked");
+        require(_lottery.status == LotteryState.Open, "Winner has been picked");
         require(block.timestamp >= _lottery.endTime, "Lottery has not ended yet");
 
         uint256 requestId = coordinator.requestRandomWords(
@@ -88,7 +94,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, AutomationCompatibleInterface {
             NUM_WORDS
         );
 
-        lotteries[_currentLotteryId].winnerPicked = true;
+        lotteries[_currentLotteryId].status = LotteryState.Pending;
         lotteryRequests[requestId] = _currentLotteryId;
     }
 
@@ -99,7 +105,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, AutomationCompatibleInterface {
         uint256 _currentLotteryId = currentLotteryId;
         SingleLottery memory _lottery = lotteries[_currentLotteryId];
 
-        require(!_lottery.winnerPicked, "Winner has been picked");
+        require(_lottery.status == LotteryState.Open, "Winner has been picked");
         require(block.timestamp <= _lottery.endTime, "Lottery has already ended");
         require(block.timestamp >= _lottery.startTime, "Lottery has not started yet");
         require(playerTicketAmounts[_currentLotteryId][msg.sender] == 0, "You already have tickets in this lottery");
@@ -125,7 +131,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, AutomationCompatibleInterface {
     function claimReward(uint256 _lotteryId) public {
         SingleLottery memory _lottery = lotteries[_lotteryId];
 
-        require(_lottery.winnerPicked, "Lottery has not ended yet");
+        require(_lottery.status == LotteryState.FullFilled, "Lottery has not ended yet");
         require(!_lottery.claimed, "Lottery has already been claimed");
         require(_checkIfWinner(_lotteryId), "You are not a winner");
 
@@ -149,6 +155,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, AutomationCompatibleInterface {
         }
 
         lotteries[_lotteryId].winningTicket = _randomWords[0] % lotteries[_lotteryId].totalTickets;
+        lotteries[_lotteryId].status = LotteryState.FullFilled;
 
         uint256 _fee = _calculateProtocolFee(_lotteryId);
 
@@ -161,7 +168,7 @@ contract Lottery is Ownable, VRFConsumerBaseV2, AutomationCompatibleInterface {
     function _createLottery() private {
         uint256 _currentLotteryId = currentLotteryId;
 
-        if (isActive && (lotteries[_currentLotteryId].winnerPicked || _currentLotteryId == 0)) {
+        if (isActive && (lotteries[_currentLotteryId].status != LotteryState.Open || _currentLotteryId == 0)) {
             lotteries[_currentLotteryId + 1].startTime = block.timestamp;
             lotteries[_currentLotteryId + 1].endTime = _calculateNextFinishTime(block.timestamp);
             currentLotteryId++;
